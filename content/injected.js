@@ -37,7 +37,64 @@
         bestScore = score;
       }
     }
+    if (best) return best;
+    return pickPipVideo();
+  }
+
+  // ---------- Picture-in-Picture support ----------
+  // Sites like Bilibili move the whole player — including its <video> — into
+  // a Document Picture-in-Picture window, leaving the page with no playable
+  // video of its own. The PiP window is same-origin with the opener, so its
+  // <video> can be found and controlled directly from this MAIN-world script.
+  //
+  // Native video PiP (document.pictureInPictureElement) keeps the element in
+  // this document, even when the site hides or un-sizes it while popped out.
+
+  function getPipWindow() {
+    try {
+      const api = window.documentPictureInPicture;
+      if (!api || !api.window || !api.window.document) return null;
+      return api.window;
+    } catch {
+      return null;
+    }
+  }
+
+  function pickPipVideo() {
+    try {
+      const pipEl = document.pictureInPictureElement;
+      if (pipEl && pipEl.tagName === "VIDEO") return pipEl;
+    } catch { /* ignore */ }
+
+    const pipWin = getPipWindow();
+    if (!pipWin) return null;
+    let best = null;
+    for (const video of pipWin.document.querySelectorAll("video")) {
+      if (video.readyState < 1 && !video.currentSrc && !video.src) continue;
+      if (!best) { best = video; continue; }
+      if (!video.paused && best.paused) { best = video; continue; }
+      if (video.paused && !best.paused) continue;
+      const a = video.getBoundingClientRect();
+      const b = best.getBoundingClientRect();
+      if (a.width * a.height > b.width * b.height) best = video;
+    }
     return best;
+  }
+
+  function watchPipWindow(win) {
+    if (!win) return;
+    try {
+      if (win.__pkPipWatched) return;
+      win.__pkPipWatched = true;
+    } catch { /* ignore */ }
+    // The player moves back to this page when the PiP window closes.
+    win.addEventListener("pagehide", () => {
+      setTimeout(() => {
+        scanVideos();
+        const v = pickBestVideo();
+        if (v) announce(v.paused ? "paused" : "playing");
+      }, 0);
+    });
   }
 
   // ---------- Anti-fightback (per-instance, narrow blast radius) ----------
@@ -374,10 +431,13 @@
 
   function attachShadowHost() {
     ensureShadow();
-    if (!pkHostEl.isConnected) {
-      const host = document.body || document.documentElement;
-      if (host) host.appendChild(pkHostEl);
-    }
+    if (pkHostEl.isConnected) return;
+    // When a Document PiP window is open the user watches that window, so
+    // anchor the toast / badge there instead of the (hidden) opener page.
+    const pipWin = getPipWindow();
+    const hostDoc = pipWin ? pipWin.document : document;
+    const host = hostDoc.body || hostDoc.documentElement;
+    if (host) host.appendChild(pkHostEl);
   }
 
   function showToast(payload) {
@@ -389,7 +449,8 @@
     toastIcEl.textContent   = payload.ic   || "•";
     toastNameEl.textContent = payload.name || "";
     toastDetEl.textContent  = payload.det  || "";
-    requestAnimationFrame(() => toastEl.classList.add("on"));
+    const targetWin = getPipWindow() || window;
+    targetWin.requestAnimationFrame(() => toastEl.classList.add("on"));
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => toastEl.classList.remove("on"), toastDurationMs);
   }
@@ -540,6 +601,18 @@
 
   function scanVideos() {
     document.querySelectorAll("video").forEach(attachVideoListeners);
+    // Videos popped out into Picture-in-Picture live outside this document's
+    // normal tree: the native PiP element stays here, while a Document PiP
+    // player lives in a same-origin PiP window. Keep them announced too.
+    try {
+      const pipEl = document.pictureInPictureElement;
+      if (pipEl && pipEl.tagName === "VIDEO") attachVideoListeners(pipEl);
+    } catch { /* ignore */ }
+    const pipWin = getPipWindow();
+    if (pipWin) {
+      pipWin.document.querySelectorAll("video").forEach(attachVideoListeners);
+      watchPipWindow(pipWin);
+    }
   }
 
   // Initial pass.
@@ -570,6 +643,22 @@
     }
   });
   mo.observe(document.documentElement, { subtree: true, childList: true });
+
+  // Document Picture-in-Picture opens its own window, which the observer above
+  // never sees (the player is moved out of this document). Re-scan and re-announce
+  // when a PiP window opens so presence stays accurate.
+  try {
+    const pipApi = window.documentPictureInPicture;
+    if (pipApi && typeof pipApi.addEventListener === "function") {
+      pipApi.addEventListener("enter", () => {
+        setTimeout(() => {
+          scanVideos();
+          const v = pickBestVideo();
+          if (v) announce(v.paused ? "paused" : "playing");
+        }, 0);
+      });
+    }
+  } catch { /* ignore */ }
 
   // YouTube SPA navigation.
   document.addEventListener("yt-navigate-finish", () => setTimeout(scanVideos, 50));

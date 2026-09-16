@@ -111,6 +111,85 @@ try {
   const rate = await page.$eval("video", (video) => video.playbackRate);
   if (rate !== 1.25) throw new Error(`expected playbackRate 1.25, got ${rate}`);
 
+  // --- Document Picture-in-Picture scenario ---
+  // Sites like Bilibili move the whole player (and its <video>) into a
+  // Document PiP window; the page then has no video of its own. Detection
+  // must still find and control it.
+  const pipSupported = await page.evaluate(() => "documentPictureInPicture" in window);
+  if (pipSupported) {
+    await page.click("#pip-btn");
+    await page.waitForFunction(() => {
+      const w = window.documentPictureInPicture?.window;
+      return w && w.document.querySelector("video") != null;
+    });
+
+    // 1) Command dispatch: SW -> bridge -> MAIN world must reach the PiP video.
+    await worker.evaluate(async (targetUrl) => {
+      const tabs = await chrome.tabs.query({});
+      const tab = tabs.find((candidate) => candidate.url === targetUrl);
+      if (!tab?.id) return false;
+      const message = {
+        type: "playbackkeys:command",
+        payload: { action: "speed", delta: 0.25, min: 0.25, max: 4, wrap: false },
+        showToast: false,
+        prefs: { showToast: false, showBadge: true, toastDurationMs: 1500 },
+      };
+      await chrome.tabs.sendMessage(tab.id, message);
+      return true;
+    }, page.url());
+    await page.waitForFunction(
+      () => {
+        const w = window.documentPictureInPicture?.window;
+        return w && w.document.querySelector("video")?.playbackRate === 1.5;
+      },
+      { timeout: 5000 },
+    );
+    const pipRate = await page.evaluate(
+      () => window.documentPictureInPicture.window.document.querySelector("video").playbackRate,
+    );
+    if (pipRate !== 1.5) throw new Error(`expected PiP playbackRate 1.5, got ${pipRate}`);
+
+    // 2) SW probe (executeScript, MAIN world) must see the PiP video, mirroring
+    // the videoPageAction fallback used by tabHasVideo.
+    const probeFound = await worker.evaluate(async (targetUrl) => {
+      const tabs = await chrome.tabs.query({});
+      const tab = tabs.find((candidate) => candidate.url === targetUrl);
+      if (!tab?.id) return false;
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        world: "MAIN",
+        func: () => {
+          try {
+            const pipEl = document.pictureInPictureElement;
+            if (pipEl && pipEl.tagName === "VIDEO") return true;
+          } catch { /* ignore */ }
+          try {
+            const api = window.documentPictureInPicture;
+            const win = api && api.window;
+            if (win && win.document) {
+              for (const v of win.document.querySelectorAll("video")) {
+                if (v.readyState < 1 && !v.currentSrc && !v.src) continue;
+                return true;
+              }
+            }
+          } catch { /* ignore */ }
+          return false;
+        },
+      });
+      return results.some((r) => r?.result === true);
+    }, page.url());
+    if (!probeFound) throw new Error("SW probe did not detect the PiP video");
+
+    // 3) Closing the PiP window moves the video back to the page.
+    await page.evaluate(() => {
+      const w = window.documentPictureInPicture?.window;
+      if (w) w.close();
+    });
+    await page.waitForFunction(() => document.body.contains(document.querySelector("video")));
+  } else {
+    console.log("Document PiP not supported in this browser; skipping PiP scenario.");
+  }
+
   console.log("PlaybackKeys smoke test passed.");
 } finally {
   await context.close();

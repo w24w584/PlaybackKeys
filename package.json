@@ -1,6 +1,6 @@
 {
   "name": "playbackkeys",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "description": "Global keyboard shortcuts for YouTube, Udemy, Vimeo, Coursera, and browser videos.",
   "scripts": {

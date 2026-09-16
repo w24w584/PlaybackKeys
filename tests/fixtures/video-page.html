@@ -10,5 +10,24 @@
 </head>
 <body>
   <video src="data:video/mp4;base64,AAAA" controls></video>
+  <button id="pip-btn" type="button">Open Document PiP</button>
+  <script>
+    // Bilibili-style player: clicking the button moves the <video> into a
+    // Document Picture-in-Picture window, leaving the page without a video.
+    (() => {
+      const video = document.querySelector("video");
+      document.getElementById("pip-btn").addEventListener("click", async () => {
+        if (!("documentPictureInPicture" in window)) return;
+        const pipWindow = await window.documentPictureInPicture.requestWindow({
+          width: 480,
+          height: 270,
+        });
+        pipWindow.document.body.append(video);
+        pipWindow.addEventListener("pagehide", () => {
+          document.body.append(video);
+        });
+      });
+    })();
+  </script>
 </body>
 </html>

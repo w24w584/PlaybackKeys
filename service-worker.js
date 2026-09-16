@@ -118,7 +118,34 @@ function videoPageAction(action, payload) {
         bestScore = score;
       }
     }
-    return best;
+    if (best) return best;
+    return pickPipVideo();
+  }
+  // Fall back to the video the user explicitly popped out into Picture-in-Picture:
+  // native video PiP keeps the element in this document (even if the site hides
+  // it), while Document PiP moves the player into a same-origin PiP window that
+  // is reachable from this frame.
+  function pickPipVideo() {
+    try {
+      const pipEl = document.pictureInPictureElement;
+      if (pipEl && pipEl.tagName === "VIDEO") return pipEl;
+    } catch { /* ignore */ }
+    try {
+      const api = window.documentPictureInPicture;
+      const win = api && api.window;
+      if (!win || !win.document) return null;
+      let best = null;
+      for (const video of win.document.querySelectorAll("video")) {
+        if (video.readyState < 1 && !video.currentSrc && !video.src) continue;
+        if (!best) { best = video; continue; }
+        if (!video.paused && best.paused) { best = video; continue; }
+        if (video.paused && !best.paused) continue;
+        const a = video.getBoundingClientRect();
+        const b = best.getBoundingClientRect();
+        if (a.width * a.height > b.width * b.height) best = video;
+      }
+      return best;
+    } catch { return null; }
   }
 
   if (action === "hasVideo") {

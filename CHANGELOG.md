@@ -2,6 +2,12 @@
 
 All notable changes to PlaybackKeys will be documented in this file.
 
+## [0.7.1] - 2026-09-16
+
+### Fixed
+- Detects and controls videos that sites (e.g. Bilibili) move into a Document Picture-in-Picture window. The in-page player disappears while the mini window is open, so video discovery now also checks the same-origin PiP window (`documentPictureInPicture.window`) and the native `document.pictureInPictureElement`.
+- Anchors the speed badge / toast to the PiP window while a Document PiP window is open, so feedback stays visible where the video is actually being watched.
+
 ## [0.7.0] - 2026-05-29
 
 ### Added
